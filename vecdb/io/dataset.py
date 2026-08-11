@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import tarfile
 import urllib.request
+import hashlib
 import numpy as np
 from tqdm import tqdm
 
@@ -11,12 +12,27 @@ from vecdb.io.fvecs import read_fvecs, read_ivecs
 SIFTSMALL_URL = "ftp://ftp.irisa.fr/local/texmex/corpus/siftsmall.tar.gz"
 SIFT1M_URL = "ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz"
 
+_EXPECTED_MD5 = {
+    "siftsmall.tar.gz": "0b8324a7a82d7f2663d7dcbd57642df7",
+    "sift.tar.gz": "b23d1b3b2ee8469d819b61ca900ef0ed",
+}
+
 
 @dataclass
 class DatasetBundle:
     base: np.ndarray        # (N, d) float32
     queries: np.ndarray     # (Q, d) float32
     groundtruth: np.ndarray  # (Q, k) int32, unfiltered top-k neighbour ids
+
+
+def _verify_checksum(path: Path) -> None:
+    expected = _EXPECTED_MD5.get(path.name)
+    if expected is None:
+        return  # no known checksum for this filename; nothing to verify against
+    actual = hashlib.md5(path.read_bytes()).hexdigest()
+    if actual != expected:
+        path.unlink()
+        raise ValueError(f"checksum mismatch for {path.name}: expected {expected}, got {actual}")
 
 
 def _download(url: str, dest: Path) -> None:
@@ -33,6 +49,7 @@ def _download(url: str, dest: Path) -> None:
                 break
             f.write(chunk)
             bar.update(len(chunk))
+    _verify_checksum(tmp)
     tmp.rename(dest)
 
 
@@ -41,7 +58,7 @@ def _extract(archive: Path, into: Path) -> None:
         return
     into.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive) as tf:
-        tf.extractall(into)
+        tf.extractall(into, filter="data")
 
 
 def download_siftsmall(cache_dir: Path) -> Path:
@@ -61,17 +78,18 @@ def download_sift1m(cache_dir: Path) -> Path:
 
 
 def _subset_100k(base: np.ndarray, groundtruth: np.ndarray, n: int = 100_000) -> tuple[np.ndarray, np.ndarray]:
-    """Truncate base to the first n rows; drop groundtruth ids that fall outside the subset
-    from each row (do NOT clip/relabel them — a dropped id must not silently become a wrong id)."""
+    """Truncate base to the first n rows; drop groundtruth ids that fall outside the
+    subset from each row (do NOT clip/relabel them). Rows that lose ids end up shorter
+    than others, so all rows are right-padded with -1 to a common width — never
+    truncated to the shortest row, which would silently destroy every row's data if
+    even one query has zero surviving ids after filtering."""
     new_base = base[:n]
     new_gt = [row[row < n] for row in groundtruth]
-    max_len = max(len(r) for r in new_gt)
+    max_len = max((len(r) for r in new_gt), default=0)
     padded = np.full((groundtruth.shape[0], max_len), -1, dtype=np.int32)
     for i, row in enumerate(new_gt):
         padded[i, : len(row)] = row
-    # trim to the shortest common length so the array stays rectangular and valid everywhere
-    min_len = min(len(row) for row in new_gt)
-    return new_base, padded[:, :min_len]
+    return new_base, padded
 
 
 def load(name: str, cache_dir: Path = Path("data")) -> DatasetBundle:
