@@ -6,15 +6,15 @@
 
 **Architecture:** Layered — storage (memmapped vectors + columnar metadata) → predicate compiler/selectivity estimator → index (Flat ground-truth, hand-written HNSW) → three strategy implementations → cost-model-driven planner → FastAPI service. Benchmarking harness and figure generation sit alongside as `bench/`.
 
-**Tech Stack:** Python 3.12, NumPy, FAISS (`faiss-cpu`, baseline comparison only), FastAPI + uvicorn + Pydantic v2, matplotlib, pandas, pytest, scikit-learn (k-means for correlated metadata only), tqdm, requests.
+**Tech Stack:** Python 3.12, NumPy, FAISS (`faiss-cpu`, baseline comparison only), FastAPI + uvicorn + Pydantic v2, matplotlib, pandas, pytest, scikit-learn (k-means for correlated metadata only), tqdm. (`requests` was in the original dependency list but was dropped during Task 3 — the dataset host is FTP-only, which `requests` doesn't support, so downloads use the standard-library `urllib.request` instead.)
 
 ## Global Constraints
 
 - Python 3.12 (already installed at `C:\Users\ASUS\AppData\Local\Programs\Python\Python312`). Create a project-local venv at `D:\vecdb\.venv`.
 - OS is Windows 11; commands run through the Bash tool (Git Bash) unless noted. Use forward slashes and Python's `pathlib` everywhere in source — no hardcoded backslashes.
-- Dependencies (pin no further than major version): `numpy`, `faiss-cpu`, `fastapi`, `uvicorn`, `pydantic>=2`, `matplotlib`, `pandas`, `pytest`, `tqdm`, `scikit-learn`, `requests`. No Numba (cut per spec §3).
+- Dependencies (pin no further than major version): `numpy`, `faiss-cpu`, `fastapi`, `uvicorn`, `pydantic>=2`, `matplotlib`, `pandas`, `pytest`, `tqdm`, `scikit-learn`. No Numba (cut per spec §3). (`requests` was originally listed here too but removed in Task 3 — see Tech Stack note above.)
 - Benchmark scale is **100K SIFT subset only** — never build or sweep the full 1M set.
-- Dataset source is `http://corpus-texmex.irisa.fr/` — plain HTTP only, the host's HTTPS cert does not validate from this environment.
+- Dataset source is the TEXMEX corpus, served only over **FTP**: `ftp://ftp.irisa.fr/local/texmex/corpus/{siftsmall,sift}.tar.gz` (discovered during Task 3 implementation — the `http://corpus-texmex.irisa.fr/` landing page itself answers over HTTP, but every actual dataset file it links to is FTP-only; `requests` doesn't support `ftp://`, so downloads use `urllib.request`).
 - Hand-written files (must contain real, author-level algorithmic code, not scaffolding): `vecdb/index/hnsw.py`, `vecdb/index/strategies.py`, `vecdb/planner/cost_model.py`, `vecdb/planner/planner.py`, `vecdb/predicate/compile.py`, `vecdb/predicate/selectivity.py`, `vecdb/bench/harness.py` (recall/tie-handling logic specifically).
 - Git: one commit per task (minimum), `git push origin main` at the end of every phase. Never force-push.
 - Every "Done when" gate in a phase is a hard checkpoint — do not proceed past a failed gate without either fixing it or explicitly logging it as a documented limitation per spec §6.
@@ -259,14 +259,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import tarfile
+import urllib.request
 import numpy as np
-import requests
 from tqdm import tqdm
 
 from vecdb.io.fvecs import read_fvecs, read_ivecs
 
-SIFTSMALL_URL = "http://corpus-texmex.irisa.fr/siftsmall.tar.gz"
-SIFT1M_URL = "http://corpus-texmex.irisa.fr/sift.tar.gz"
+# The TEXMEX corpus landing page answers over HTTP, but every dataset file it
+# links to is FTP-only — verified by inspecting the page's actual <a href> links.
+SIFTSMALL_URL = "ftp://ftp.irisa.fr/local/texmex/corpus/siftsmall.tar.gz"
+SIFT1M_URL = "ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz"
 
 
 @dataclass
@@ -277,15 +279,17 @@ class DatasetBundle:
 
 
 def _download(url: str, dest: Path) -> None:
+    """urllib.request (not requests) because requests doesn't support ftp://."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         return
-    resp = requests.get(url, stream=True, timeout=60)
-    resp.raise_for_status()
-    total = int(resp.headers.get("content-length", 0))
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with open(tmp, "wb") as f, tqdm(total=total, unit="B", unit_scale=True, desc=dest.name) as bar:
-        for chunk in resp.iter_content(chunk_size=1 << 20):
+    with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as f, \
+            tqdm(total=getattr(resp, "length", None), unit="B", unit_scale=True, desc=dest.name) as bar:
+        while True:
+            chunk = resp.read(1 << 20)
+            if not chunk:
+                break
             f.write(chunk)
             bar.update(len(chunk))
     tmp.rename(dest)
