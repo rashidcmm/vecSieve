@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+*.npz
+*.npy
+results/*.csv
+results/*.json
+results/figures/*.png
+!results/.gitkeep
+!results/figures/.gitkeep
+.pytest_cache/
+*.egg-info/
