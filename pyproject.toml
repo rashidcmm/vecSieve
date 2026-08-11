@@ -13,7 +13,6 @@ dependencies = [
     "pandas>=2.2",
     "tqdm>=4.66",
     "scikit-learn>=1.4",
-    "requests>=2.31",
 ]
 
 [project.optional-dependencies]

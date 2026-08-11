@@ -2,14 +2,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import tarfile
+import urllib.request
 import numpy as np
-import requests
 from tqdm import tqdm
 
 from vecdb.io.fvecs import read_fvecs, read_ivecs
 
-SIFTSMALL_URL = "http://corpus-texmex.irisa.fr/siftsmall.tar.gz"
-SIFT1M_URL = "http://corpus-texmex.irisa.fr/sift.tar.gz"
+SIFTSMALL_URL = "ftp://ftp.irisa.fr/local/texmex/corpus/siftsmall.tar.gz"
+SIFT1M_URL = "ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz"
 
 
 @dataclass
@@ -23,12 +23,14 @@ def _download(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         return
-    resp = requests.get(url, stream=True, timeout=60)
-    resp.raise_for_status()
-    total = int(resp.headers.get("content-length", 0))
     tmp = dest.with_suffix(dest.suffix + ".part")
-    with open(tmp, "wb") as f, tqdm(total=total, unit="B", unit_scale=True, desc=dest.name) as bar:
-        for chunk in resp.iter_content(chunk_size=1 << 20):
+    with urllib.request.urlopen(url, timeout=60) as resp, open(tmp, "wb") as f, tqdm(
+        total=getattr(resp, "length", None), unit="B", unit_scale=True, desc=dest.name
+    ) as bar:
+        while True:
+            chunk = resp.read(1 << 20)
+            if not chunk:
+                break
             f.write(chunk)
             bar.update(len(chunk))
     tmp.rename(dest)
