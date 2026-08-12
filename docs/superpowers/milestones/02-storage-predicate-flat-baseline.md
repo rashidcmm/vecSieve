@@ -2,19 +2,23 @@
 
 ## What got built
 
-Task 6–13 delivered the core storage and indexing layer. We built `vecdb.store.VectorStore` (in-memory vector storage with contiguous row and ID tracking), `vecdb.store.MetaStore` (statistics-only metadata store using histograms and value counts—never touching raw attribute columns), and `vecdb.index.IdMap` (external ID ↔ internal row lookup with roundtrip tests). The predicate DSL in `vecdb.query.predicate` provides a composable AST (Eq, Gt, In, And, Or, Not) with deterministic evaluation via `vecdb.query.compiler.compile_predicate` to boolean masks. Selectivity estimation in `vecdb.selectivity` reads *only* MetaStore statistics, never touching raw data or masks, enabling fast cost modeling at plan time. The `vecdb.index.flat.FlatIndex` is a reference exact-search implementation using brute-force L2 distance over all vectors, returning results sorted by distance. The `vecdb.bench.harness` runs end-to-end benchmarks on arbitrary indexes against ground truth, computing recall@k from comparison sets. Finally, FAISS baselines (`vecdb.index.faiss_baseline.FaissFlatIndex` and `FaissHNSWIndex`) wrap FAISS's own exact and approximate search for sanity checking and performance comparison across all later phases.
+Task 6–13 delivered the core storage and indexing layer. We built `vecdb.store.vectors.VectorStore` (row-major float32 vector storage that computes batched squared-L2 distance as a single matrix-vector product via the `||q-v||^2 = ||q||^2 - 2 q.v + ||v||^2` identity, and tracks a running `n_distance_ops` counter), `vecdb.store.metadata.MetaStore` (columnar attribute storage, one `np.ndarray` per column, that precomputes per-column statistics — value counts for categorical `int32` columns, a 64-bin histogram for numeric columns — and never re-touches the raw columns at query time), and `vecdb.store.idmap.IdMap` (external ID ↔ internal dense row index, assigned sequentially on `add()`, with roundtrip tests).
+
+The predicate DSL in `vecdb.predicate.dsl` is dict-based, not a class hierarchy: predicates are nested, JSON-compatible dicts with a lowercase string `"op"` key. Leaf ops (`"eq"`, `"ne"`, `"lt"`, `"lte"`, `"gt"`, `"gte"`, `"in"`) carry `"col"` and `"val"`; combinator ops (`"and"`, `"or"`) carry a non-empty `"clauses"` list; `"not"` carries a single `"clause"`. `validate_predicate()` recursively checks this shape and raises `ValueError` on malformed input. `vecdb.predicate.compile.compile()` recursively walks the same dict structure and evaluates it against a `MetaStore`, combining boolean masks with `&`, `|`, and `~` for `and`/`or`/`not`, and calling straight through to numpy comparisons (`==`, `!=`, `<`, `<=`, `>`, `>=`, `np.isin`) for the leaf ops, producing a single boolean mask over rows.
+
+Selectivity estimation in `vecdb.predicate.selectivity` walks the same predicate dicts but reads *only* `MetaStore` statistics (value counts / histogram edges and counts), never touching raw columns or masks — categorical `eq`/`ne`/`in` divide value counts by `n`, numeric `lt`/`lte`/`gt`/`gte` interpolate within the histogram bin containing the threshold, `and` multiplies child selectivities under an independence assumption, `or` uses inclusion-exclusion, and `not` is `1 - child`. The `vecdb.index.flat.FlatIndex` is a reference exact-search implementation using brute-force L2 distance over all vectors, returning results sorted by distance. The `vecdb.bench.harness` runs end-to-end benchmarks on arbitrary indexes against ground truth, computing recall@k from comparison sets. Finally, FAISS baselines (`vecdb.index.faiss_baseline.FaissFlatIndex` and `FaissHNSWIndex`) wrap FAISS's own exact and approximate search for sanity checking and performance comparison across all later phases.
 
 ## Numbers
 
-**Test pass counts by task:**
+**Test pass counts by file:**
 - Tasks 6–13 combined: 47 tests passing (all green, no failures)
-- Test breakdown: VectorStore (3), MetaStore (3), IdMap (2), Predicate DSL (8), Selectivity estimation (6), Flat index & vectors (4), Benchmark harness (2), FAISS baselines (2)
+- Test breakdown: `tests/test_fvecs.py` (2), `tests/test_dataset.py` (3), `tests/test_metadata_gen.py` (3), `tests/test_vectors.py` (4), `tests/test_metastore.py` (3), `tests/test_idmap.py` (4), `tests/test_predicate.py` (10), `tests/test_selectivity.py` (7), `tests/test_flat_index.py` (3), `tests/test_harness.py` (6), `tests/test_faiss_baseline.py` (2) — sums to 47
 
 **Baseline recall verification (Phase 2 gate):**
 - FlatIndex recall@100 (siftsmall, 100 queries): **1.0**
 - FaissFlatIndex recall@100 (siftsmall, 100 queries): **1.0**
 
-Both indexes are exact-search implementations and return bitwise-identical results against the SIFT ground truth.
+Both indexes are exact-search implementations and each achieves perfect recall@100 against the SIFT ground truth. `scripts/verify_baseline.py` verifies this via `recall@100 == 1.0` for both, which is agnostic to tie-order among equidistant neighbors — it does not assert that the two indexes return bitwise-identical result arrays.
 
 ## Gate status
 
