@@ -78,6 +78,27 @@ class HNSWIndex(Index):
 
         return sorted((-nd, node) for nd, node in results)
 
+    def _select_neighbors_heuristic(self, candidates: list[tuple[float, int]], M: int) -> list[tuple[float, int]]:
+        """Algorithm 4 (Malkov & Yashunin). Keep candidate c only if it is closer to
+        the query than to every neighbour already selected — this enforces a relative-
+        neighbourhood-graph property (diverse directions) instead of M clustered points.
+        `candidates` is (distance_to_query, node_id) pairs, any order."""
+        candidates = sorted(candidates)
+        selected: list[tuple[float, int]] = []
+        for d_qc, c in candidates:
+            if len(selected) >= M:
+                break
+            c_vec = self.store.vector(c)
+            keep = True
+            for _, r in selected:
+                d_cr = float(np.sum((c_vec - self.store.vector(r)) ** 2))
+                if d_cr < d_qc:
+                    keep = False
+                    break
+            if keep:
+                selected.append((d_qc, c))
+        return selected
+
     def add(self, vectors: np.ndarray, ids: np.ndarray) -> None:
         """Stub: will be implemented in later tasks."""
         raise NotImplementedError("HNSW insert() will be implemented in a later task")
