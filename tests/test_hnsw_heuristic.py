@@ -3,14 +3,18 @@ from vecdb.index.hnsw import HNSWIndex
 from vecdb.store.vectors import VectorStore
 
 def test_heuristic_prefers_diverse_directions_over_pure_nearest():
-    # Query at origin. Two candidates are close together in the same direction (c0, c1,
-    # nearly collinear with the query) and one is farther but in a different direction (c2).
-    # Naive top-2-nearest would pick {c0, c1}; the heuristic should reject c1 because it's
-    # closer to c0 than to the query, and pick c2 instead for diversity.
+    # Query at origin. c0 is nearest, c1 is second-nearest but nearly collinear with c0
+    # (so it's much closer to c0 than to the query), and c2 is farthest of the three but
+    # in a diverse direction (closer to the query than to c0). Sorted-by-distance order
+    # is c0, c1, c2, so the M=2 loop keeps c0, then actually evaluates c1 next (it hasn't
+    # hit the M cap yet) and must reject it via the relative-neighbourhood check
+    # (d(c1,c0)^2=0.0025 << d(query,c1)^2=1.1025) before reaching c2, which it keeps
+    # (d(c2,c0)^2=2.44 >= d(query,c2)^2=1.44). A naive "keep the M closest" shortcut would
+    # instead pick {c0, c1} and fail this test.
     points = np.array([
-        [1.0, 0.0],   # c0: dist^2 to origin = 1
-        [1.1, 0.0],   # c1: dist^2 to origin = 1.21, but very close to c0
-        [0.0, 1.05],  # c2: dist^2 to origin = 1.1025, different direction from c0
+        [1.0, 0.0],   # c0: dist^2 to origin = 1.0 (nearest, kept)
+        [1.05, 0.0],  # c1: dist^2 to origin = 1.1025 (second-nearest, but rejected: too close to c0)
+        [0.0, 1.2],   # c2: dist^2 to origin = 1.44 (farthest, but kept: diverse direction from c0)
     ], dtype=np.float32)
     idx = HNSWIndex(dim=2, seed=0)
     idx.store = VectorStore(points)
