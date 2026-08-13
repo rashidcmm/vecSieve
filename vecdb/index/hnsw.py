@@ -99,11 +99,75 @@ class HNSWIndex(Index):
                 selected.append((d_qc, c))
         return selected
 
+    def _insert(self, node_id: int) -> None:
+        level = self._assign_level()
+        self._ensure_layers(level)
+        while len(self.levels) <= node_id:
+            self.levels.append(-1)
+        self.levels[node_id] = level
+
+        if self.entry_point == -1:
+            for layer in range(level + 1):
+                self.graph[layer].setdefault(node_id, [])
+            self.entry_point = node_id
+            self.max_level = level
+            return
+
+        q = self.store.vector(node_id)
+        ep = [self.entry_point]
+        for layer in range(self.max_level, level, -1):
+            nearest = self._search_layer(q, ep, ef=1, layer=layer)
+            if nearest:
+                ep = [nearest[0][1]]
+
+        for layer in range(min(level, self.max_level), -1, -1):
+            candidates = self._search_layer(q, ep, self.ef_construction, layer)
+            cap = self.M0 if layer == 0 else self.M
+            neighbours = self._select_neighbors_heuristic(candidates, cap)
+
+            self.graph[layer].setdefault(node_id, [])
+            self.graph[layer][node_id] = [n for _, n in neighbours]
+
+            for _, n in neighbours:
+                self.graph[layer].setdefault(n, [])
+                if node_id not in self.graph[layer][n]:
+                    self.graph[layer][n].append(node_id)
+                if len(self.graph[layer][n]) > cap:
+                    nb_ids = self.graph[layer][n]
+                    nb_vec = self.store.vector(n)
+                    nb_candidates = [(float(np.sum((self.store.vector(x) - nb_vec) ** 2)), x) for x in nb_ids]
+                    pruned = self._select_neighbors_heuristic(nb_candidates, cap)
+                    self.graph[layer][n] = [x for _, x in pruned]
+
+            ep = [n for _, n in neighbours] if neighbours else ep
+
+        if level > self.max_level:
+            self.max_level = level
+            self.entry_point = node_id
+
     def add(self, vectors: np.ndarray, ids: np.ndarray) -> None:
-        """Stub: will be implemented in later tasks."""
-        raise NotImplementedError("HNSW insert() will be implemented in a later task")
+        assert np.array_equal(np.asarray(ids), np.arange(len(ids))), \
+            "HNSWIndex expects dense internal ids 0..N-1"
+        self.store = VectorStore(vectors)
+        for node_id in range(len(ids)):
+            self._insert(node_id)
 
     def search(self, q: np.ndarray, k: int, mask: np.ndarray | None = None,
                 params: dict | None = None) -> SearchResult:
-        """Stub: will be implemented in later tasks."""
-        raise NotImplementedError("HNSW search() will be implemented in a later task")
+        assert mask is None, "HNSWIndex.search is unfiltered; filtered strategies live in vecdb.index.strategies"
+        assert self.store is not None and self.entry_point != -1, "index is empty"
+        ef = (params or {}).get("ef", max(self.ef_search_default, k))
+        ops_before = self.store.n_distance_ops
+        t0 = time.perf_counter()
+        ep = [self.entry_point]
+        for layer in range(self.max_level, 0, -1):
+            nearest = self._search_layer(q, ep, ef=1, layer=layer)
+            if nearest:
+                ep = [nearest[0][1]]
+        candidates = self._search_layer(q, ep, ef=max(ef, k), layer=0)[:k]
+        latency_ms = (time.perf_counter() - t0) * 1000
+        ids = np.array([n for _, n in candidates], dtype=np.int64)
+        dists = np.array([d for d, _ in candidates], dtype=np.float32)
+        return SearchResult(ids=ids, distances=dists,
+                             n_distance_ops=self.store.n_distance_ops - ops_before,
+                             strategy="hnsw", latency_ms=latency_ms, n_returned=int(ids.size))
