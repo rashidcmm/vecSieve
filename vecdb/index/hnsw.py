@@ -172,6 +172,12 @@ class HNSWIndex(Index):
                              n_distance_ops=self.store.n_distance_ops - ops_before,
                              strategy="hnsw", latency_ms=latency_ms, n_returned=int(ids.size))
 
+    def approx_size_bytes(self) -> int:
+        """Resident index size excluding raw vectors: 4 bytes per adjacency entry
+        (int32 neighbour id), summed across every layer."""
+        total_entries = sum(len(neighbours) for layer in self.graph for neighbours in layer.values())
+        return total_entries * 4
+
     def save(self, path: str | Path) -> None:
         path = Path(path)
         path.mkdir(parents=True, exist_ok=True)
