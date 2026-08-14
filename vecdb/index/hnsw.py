@@ -85,13 +85,19 @@ class HNSWIndex(Index):
     def _search_layer_filtered(self, q: np.ndarray, entry_points: list[int], ef: int, layer: int,
                                  mask: np.ndarray, budget_remaining: int | None = None,
                                  two_hop_threshold: float = 0.1) -> tuple[list[tuple[float, int]], int]:
-        """Predicate-aware variant of _search_layer. Traverses through every node
-        reachable in the graph (visitable) but admits a node into the results heap
-        only if mask[node] is True (admissible). Refusing to cross non-matching nodes
-        would strand greedy search whenever the induced subgraph is disconnected
-        (source plan §2.2) — traversing through preserves connectivity at the cost of
-        wasted distance computations on nodes that will never be returned. Returns
-        (results, ops_used) so the caller can track a distance-op budget."""
+        """Predicate-aware variant of _search_layer with ACORN-style two-hop expansion.
+        Traverses through every node reachable in the graph (visitable) but admits a node
+        into the results heap only if mask[node] is True (admissible). Refusing to cross
+        non-matching nodes would strand greedy search whenever the induced subgraph is
+        disconnected (source plan §2.2) — traversing through preserves connectivity at the
+        cost of wasted distance computations on nodes that will never be returned.
+
+        When the local match rate among a node's immediate neighbours drops below
+        two_hop_threshold, the search also evaluates neighbours-of-neighbours (two-hop
+        expansion) to densify the induced subgraph on the fly. This helps find matches
+        that would otherwise require additional iterations to reach.
+
+        Returns (results, ops_used) so the caller can track a distance-op budget."""
         if budget_remaining is None:
             budget_remaining = len(self.store)
         self._visit_generation += 1
