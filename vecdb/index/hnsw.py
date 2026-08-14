@@ -171,3 +171,33 @@ class HNSWIndex(Index):
         return SearchResult(ids=ids, distances=dists,
                              n_distance_ops=self.store.n_distance_ops - ops_before,
                              strategy="hnsw", latency_ms=latency_ms, n_returned=int(ids.size))
+
+    def save(self, path: str | Path) -> None:
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        np.save(path / "vectors.npy", self.store.data)
+        meta = {
+            "dim": self.dim, "M": self.M, "M0": self.M0, "ef_construction": self.ef_construction,
+            "entry_point": self.entry_point, "max_level": self.max_level, "levels": self.levels,
+        }
+        with open(path / "meta.pkl", "wb") as f:
+            pickle.dump(meta, f)
+        with open(path / "graph.pkl", "wb") as f:
+            pickle.dump(self.graph, f)
+
+    @classmethod
+    def load(cls, path: str | Path) -> "HNSWIndex":
+        path = Path(path)
+        vectors = np.load(path / "vectors.npy")
+        with open(path / "meta.pkl", "rb") as f:
+            meta = pickle.load(f)
+        with open(path / "graph.pkl", "rb") as f:
+            graph = pickle.load(f)
+        idx = cls(dim=meta["dim"], M=meta["M"], ef_construction=meta["ef_construction"])
+        idx.M0 = meta["M0"]
+        idx.store = VectorStore(vectors)
+        idx.entry_point = meta["entry_point"]
+        idx.max_level = meta["max_level"]
+        idx.levels = meta["levels"]
+        idx.graph = graph
+        return idx
