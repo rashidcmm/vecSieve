@@ -88,11 +88,16 @@ above the 0.90 floor the gate requires.
 | 1.0   | 14.227| 0.863   | 1.520  | 0.992 | No (loses to post; beats pre) |
 
 Same story: zero wins on correlated metadata either. Comparing the two variants directly,
-`predicate_aware`'s p95 latency is close between the two at every selectivity (largest gap is
-at s=0.1: 50.17ms uncorrelated vs 47.81ms correlated, a ~5% difference) and its recall is
-similarly close (within 0.01 of each other at every point). **Correlated metadata is not
-measurably worse for `predicate_aware` in this run** — if anything it is marginally faster at
-most selectivities, the opposite of the plan's a-priori worry (see Interview note).
+`predicate_aware`'s p95 latency is close between the two at 7 of 8 selectivities, but not
+uniformly in one direction: correlated is faster at 6 of 8 points (s=0.001, 0.005, 0.01, 0.05,
+0.1, 1.0), by 1-5%. At the other two points correlated is *slower*: s=0.25 (24.57ms correlated
+vs 23.77ms uncorrelated, ~3.4% slower) and, most notably, **s=0.5 — the single largest gap
+anywhere in the grid — where correlated p95 is 6.042ms vs uncorrelated's 5.365ms, ~12.6%
+slower**. Recall is close between the two variants everywhere (within 0.01 at every point).
+**Correlated metadata is not uniformly worse for `predicate_aware` in this run** — it is faster
+at most selectivities, but the largest single directional swing (s=0.5) runs the other way, with
+correlated metadata costing more latency there, not less (see Interview note for the full
+side-by-side and the bail-rate picture).
 
 ### Bail rate
 
@@ -153,8 +158,9 @@ the final top-10 for these queries. In plain terms: at this selectivity, the wid
 zero additional recall while dominating the cost — the quota, not the two-hop mechanism's
 correctness, is the binding cost driver.
 
-This mirrors the CSV numbers directly: `predicate_aware`'s dist_ops (25k-67k across the mid/low
-range) are actually competitive with or better than `post_filter`'s at the sparse end, but each
+This mirrors the CSV numbers directly: `predicate_aware`'s mean dist_ops (~13.8k-30.1k across
+the mid/low range, s=0.01-0.25; it never exceeds ~30,200 anywhere in the full 8-point grid, on
+either variant) are actually competitive with or better than `post_filter`'s at the sparse end, but each
 dist-op is a Python-level distance call versus `pre_filter`'s single vectorized numpy matmul
 over the masked rows — three orders of magnitude cheaper per unit of work at low selectivity —
 so being dist-op-competitive with `post_filter` is not enough to win against `pre_filter`'s
@@ -199,11 +205,15 @@ firing and a fallback (or an outright failure to reach `k` results).
 | predicate_aware recall, s=1.0   | 0.992 | 0.992 |
 
 Bail rate is identically 0.0 on both variants at every selectivity — the budget cap was never
-exceeded without first admitting `k` matches, on either metadata variant. p95 latency is close
-between the two variants at every selectivity point (correlated is actually a few percent
-*faster* at 5 of 8 points, e.g. 47.81ms vs 50.17ms at s=0.1, 77.04ms vs 78.83ms at s=0.01), and
-recall is within 0.01 of each other everywhere, if anything slightly higher for correlated at
-the sparsest point (0.996 vs 0.986 at s=0.001). Pre-filter does not "improve" relative to
+exceeded without first admitting `k` matches, on either metadata variant. Across the full 8-point
+grid, correlated is faster than uncorrelated at 6 of 8 points (s=0.001, 0.005, 0.01, 0.05, 0.1,
+1.0; e.g. 47.81ms vs 50.17ms at s=0.1, 77.04ms vs 78.83ms at s=0.01), each by roughly 1-5%. It is
+slower at the other two: s=0.25 (24.57ms vs 23.77ms, ~3.4% slower) and, the largest single gap
+anywhere in the grid, **s=0.5, where correlated is ~12.6% slower (6.042ms vs 5.365ms)** — shown
+in the table above. So the direction is not uniform, though the effect size stays modest (at most
+~13%) relative to the multi-order-of-magnitude latency gap between strategies driving the gate
+failure itself. Recall is within 0.01 of each other everywhere, if anything slightly higher for
+correlated at the sparsest point (0.996 vs 0.986 at s=0.001). Pre-filter does not "improve" relative to
 predicate-aware under correlation in any way this data shows beyond what it already does under
 uncorrelated metadata — its own numbers barely move between variants either (e.g. s=1.0:
 14.654ms uncorrelated vs 14.227ms correlated).
@@ -216,8 +226,10 @@ extreme enough, combined with those mitigations, to produce a region the search 
 within budget — seeded matching entry points in particular mean the search is never solely
 dependent on greedy descent from a single, possibly mismatched, global entry point. The honest
 answer to Q11 for *this implementation, on this dataset, at this budget*: nothing catastrophic
-breaks — bail rate stays at 0.0 and latency/recall are statistically indistinguishable from the
-uncorrelated case. The mechanism the plan warns about (stranding) is a real risk the
+breaks — bail rate stays at 0.0, and while p95 latency moves by up to ~13% between variants at
+individual selectivities (in both directions, not consistently favoring one variant), that is
+far from the order-of-magnitude degradation ("degrades badly... strands") the plan's prediction
+describes. The mechanism the plan warns about (stranding) is a real risk the
 mitigations were built to address, and on this workload they succeed at preventing it; the
 gate still fails, but for the unrelated reason documented above (the admission-quota /
 dist-ops-cost mismatch), not for stranding. Answering this question honestly means reporting
