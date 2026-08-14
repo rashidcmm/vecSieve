@@ -98,3 +98,58 @@ class PostFilterStrategy(Index):
         return SearchResult(ids=ids, distances=dists,
                              n_distance_ops=self.hnsw.store.n_distance_ops - ops_before,
                              strategy="post_filter", latency_ms=latency_ms, n_returned=int(ids.size))
+
+
+class FilteredHNSWStrategy(Index):
+    """Strategy C: predicate-aware graph traversal. See HNSWIndex._search_layer_filtered
+    for the two-tier admission rule. Seeded with a handful of randomly sampled matching
+    nodes alongside the normal hierarchical entry point — cheap insurance against
+    starting stranded in a match-free region of the graph."""
+
+    def __init__(self, hnsw_index: HNSWIndex, fallback: Index, ef_base: int = 64,
+                 n_seed_matches: int = 8, seed: int = 0):
+        self.hnsw = hnsw_index
+        self.fallback = fallback
+        self.ef_base = ef_base
+        self.n_seed_matches = n_seed_matches
+        self._rng = np.random.default_rng(seed)
+
+    def add(self, vectors: np.ndarray, ids: np.ndarray) -> None:
+        raise NotImplementedError("FilteredHNSWStrategy wraps an already-built HNSWIndex")
+
+    def _ef_eff(self, sel_hat: float) -> int:
+        """The beam widens as matches get scarcer: ef_eff = ef_base * min(4, 1/max(s, 0.05))."""
+        sel_hat = max(sel_hat, 0.05)
+        return int(self.ef_base * min(4.0, 1.0 / sel_hat))
+
+    def search(self, q: np.ndarray, k: int, mask: np.ndarray | None = None,
+                params: dict | None = None) -> SearchResult:
+        assert mask is not None, "FilteredHNSWStrategy requires a mask"
+        params = params or {}
+        sel_hat = params.get("selectivity_hat", 1.0)
+        ef_eff = max(self._ef_eff(sel_hat), k)
+
+        t0 = time.perf_counter()
+        ops_before = self.hnsw.store.n_distance_ops
+
+        ep = [self.hnsw.entry_point]
+        for layer in range(self.hnsw.max_level, 0, -1):
+            nearest = self.hnsw._search_layer(q, ep, ef=1, layer=layer)
+            if nearest:
+                ep = [nearest[0][1]]
+
+        matches = np.nonzero(mask)[0]
+        if matches.size > 0:
+            n_seed = min(self.n_seed_matches, matches.size)
+            seeds = self._rng.choice(matches, size=n_seed, replace=False).tolist()
+            ep = sorted(set(ep) | set(seeds))
+
+        results, _ = self.hnsw._search_layer_filtered(q, ep, ef=ef_eff, layer=0, mask=mask)
+        results = results[:k]
+
+        latency_ms = (time.perf_counter() - t0) * 1000
+        n_ops = self.hnsw.store.n_distance_ops - ops_before
+        ids = np.array([n for _, n in results], dtype=np.int64)
+        dists = np.array([d for d, _ in results], dtype=np.float32)
+        return SearchResult(ids=ids, distances=dists, n_distance_ops=n_ops,
+                             strategy="predicate_aware", latency_ms=latency_ms, n_returned=int(ids.size))

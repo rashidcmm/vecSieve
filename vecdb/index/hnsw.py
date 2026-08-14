@@ -82,6 +82,61 @@ class HNSWIndex(Index):
 
         return sorted((-nd, node) for nd, node in results)
 
+    def _search_layer_filtered(self, q: np.ndarray, entry_points: list[int], ef: int, layer: int,
+                                 mask: np.ndarray, budget_remaining: int | None = None) -> tuple[list[tuple[float, int]], int]:
+        """Predicate-aware variant of _search_layer. Traverses through every node
+        reachable in the graph (visitable) but admits a node into the results heap
+        only if mask[node] is True (admissible). Refusing to cross non-matching nodes
+        would strand greedy search whenever the induced subgraph is disconnected
+        (source plan §2.2) — traversing through preserves connectivity at the cost of
+        wasted distance computations on nodes that will never be returned. Returns
+        (results, ops_used) so the caller can track a distance-op budget."""
+        if budget_remaining is None:
+            budget_remaining = len(self.store)
+        self._visit_generation += 1
+        gen = self._visit_generation
+        stamp = self._visited_stamp
+        candidates: list[tuple[float, int]] = []
+        results: list[tuple[float, int]] = []
+        ops_used = 0
+
+        if entry_points:
+            for ep in entry_points:
+                stamp[ep] = gen
+            dists = self.store.distances(q, np.array(entry_points, dtype=np.int64))
+            ops_used += len(entry_points)
+            for ep, d in zip(entry_points, dists):
+                d = float(d)
+                heapq.heappush(candidates, (d, ep))
+                if mask[ep]:
+                    heapq.heappush(results, (-d, ep))
+                    if len(results) > ef:
+                        heapq.heappop(results)
+
+        while candidates and ops_used < budget_remaining:
+            d_c, c = heapq.heappop(candidates)
+            worst_d = -results[0][0] if results else float("inf")
+            if d_c > worst_d and len(results) >= ef:
+                break
+            neighbours = [n for n in self.graph[layer].get(c, []) if stamp[n] != gen]
+            if not neighbours:
+                continue
+            for n in neighbours:
+                stamp[n] = gen
+            dists = self.store.distances(q, np.array(neighbours, dtype=np.int64))
+            ops_used += len(neighbours)
+            for n, d in zip(neighbours, dists):
+                d = float(d)
+                heapq.heappush(candidates, (d, n))  # traverse through regardless of mask
+                if mask[n]:
+                    if len(results) < ef:
+                        heapq.heappush(results, (-d, n))
+                    elif d < -results[0][0]:
+                        heapq.heappush(results, (-d, n))
+                        heapq.heappop(results)
+
+        return sorted((-nd, node) for nd, node in results), ops_used
+
     def _select_neighbors_heuristic(self, candidates: list[tuple[float, int]], M: int) -> list[tuple[float, int]]:
         """Algorithm 4 (Malkov & Yashunin). Keep candidate c only if it is closer to
         the query than to every neighbour already selected — this enforces a relative-
