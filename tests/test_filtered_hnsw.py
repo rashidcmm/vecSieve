@@ -97,3 +97,33 @@ def test_two_hop_expansion_reaches_matches_two_hops_from_the_nearest_neighbour()
     results_disabled, ops_used_disabled = idx._search_layer_filtered(q, entry_points=[0], ef=1, layer=0,
                                                                        mask=mask, budget_remaining=10, two_hop_threshold=-1.0)
     assert not results_disabled, f"Expected no results with two-hop disabled and budget=10, got {results_disabled}"
+
+def test_bails_out_to_fallback_when_budget_exhausted_without_k_results():
+    idx, points = _chain_index(n=30)
+    flat = FlatIndex(); flat.add(points, np.arange(30))
+    # a tiny budget_fraction guarantees the traversal budget is exhausted before
+    # it can reach any match, forcing a bail-out. Disable seeding to force traversal.
+    strategy = FilteredHNSWStrategy(idx, fallback=PreFilterStrategy(flat), budget_fraction=0.01,
+                                     n_seed_matches=0)
+    mask = np.zeros(30, dtype=bool)
+    mask[29] = True  # the one match is at the far end of the chain from entry_point=0
+    result = strategy.search(np.array([29.0, 0.0], dtype=np.float32), k=1, mask=mask,
+                               params={"selectivity_hat": 0.03})
+    assert result.strategy == "predicate_aware_fallback"
+    assert result.n_returned == 1
+    assert result.ids[0] == 29
+    assert strategy.bail_count == 1
+    assert strategy.query_count == 1
+    assert strategy.bail_rate == 1.0
+
+def test_does_not_bail_when_budget_is_generous():
+    idx, points = _chain_index(n=30)
+    flat = FlatIndex(); flat.add(points, np.arange(30))
+    strategy = FilteredHNSWStrategy(idx, fallback=PreFilterStrategy(flat), budget_fraction=1.0,
+                                     n_seed_matches=0)
+    mask = np.zeros(30, dtype=bool)
+    mask[29] = True
+    result = strategy.search(np.array([29.0, 0.0], dtype=np.float32), k=1, mask=mask,
+                               params={"selectivity_hat": 0.03})
+    assert result.strategy == "predicate_aware"
+    assert strategy.bail_count == 0

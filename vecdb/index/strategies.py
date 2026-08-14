@@ -107,13 +107,17 @@ class FilteredHNSWStrategy(Index):
     starting stranded in a match-free region of the graph."""
 
     def __init__(self, hnsw_index: HNSWIndex, fallback: Index, ef_base: int = 64,
-                 n_seed_matches: int = 8, seed: int = 0, two_hop_threshold: float = 0.1):
+                 n_seed_matches: int = 8, two_hop_threshold: float = 0.1,
+                 budget_fraction: float = 0.3, seed: int = 0):
         self.hnsw = hnsw_index
         self.fallback = fallback
         self.ef_base = ef_base
         self.n_seed_matches = n_seed_matches
         self.two_hop_threshold = two_hop_threshold
+        self.budget_fraction = budget_fraction
         self._rng = np.random.default_rng(seed)
+        self.bail_count = 0
+        self.query_count = 0
 
     def add(self, vectors: np.ndarray, ids: np.ndarray) -> None:
         raise NotImplementedError("FilteredHNSWStrategy wraps an already-built HNSWIndex")
@@ -123,12 +127,18 @@ class FilteredHNSWStrategy(Index):
         sel_hat = max(sel_hat, 0.05)
         return int(self.ef_base * min(4.0, 1.0 / sel_hat))
 
+    @property
+    def bail_rate(self) -> float:
+        return self.bail_count / self.query_count if self.query_count else 0.0
+
     def search(self, q: np.ndarray, k: int, mask: np.ndarray | None = None,
                 params: dict | None = None) -> SearchResult:
         assert mask is not None, "FilteredHNSWStrategy requires a mask"
         params = params or {}
         sel_hat = params.get("selectivity_hat", 1.0)
         ef_eff = max(self._ef_eff(sel_hat), k)
+
+        self.query_count += 1
 
         t0 = time.perf_counter()
         ops_before = self.hnsw.store.n_distance_ops
@@ -145,12 +155,21 @@ class FilteredHNSWStrategy(Index):
             seeds = self._rng.choice(matches, size=n_seed, replace=False).tolist()
             ep = sorted(set(ep) | set(seeds))
 
+        budget = int(self.budget_fraction * len(self.hnsw.store))
         results, _ = self.hnsw._search_layer_filtered(q, ep, ef=ef_eff, layer=0, mask=mask,
-                                                       two_hop_threshold=self.two_hop_threshold)
+                                                       budget_remaining=budget, two_hop_threshold=self.two_hop_threshold)
         results = results[:k]
 
         latency_ms = (time.perf_counter() - t0) * 1000
         n_ops = self.hnsw.store.n_distance_ops - ops_before
+
+        if len(results) < k:
+            self.bail_count += 1
+            fb = self.fallback.search(q, k, mask=mask)
+            fb.strategy = "predicate_aware_fallback"
+            fb.n_distance_ops += n_ops
+            return fb
+
         ids = np.array([n for _, n in results], dtype=np.int64)
         dists = np.array([d for d, _ in results], dtype=np.float32)
         return SearchResult(ids=ids, distances=dists, n_distance_ops=n_ops,
