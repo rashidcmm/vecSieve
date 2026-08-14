@@ -38,17 +38,20 @@ class HNSWIndex(Index):
             self.graph.append({})
 
     def _search_layer(self, q: np.ndarray, entry_points: list[int], ef: int, layer: int) -> list[tuple[float, int]]:
-        """Greedy beam search on one layer. Three collections: a min-heap of candidates
-        to expand, a max-heap of the best `ef` results found so far (so the worst can be
-        evicted cheaply), and a visited set. The early-break when the nearest unexplored
-        candidate is already worse than our worst kept result is what makes this sub-linear
-        instead of a full traversal — see source plan Day 2 debugging checklist if search
-        ends up slow despite good recall."""
-        visited = set(entry_points)
-        candidates: list[tuple[float, int]] = []   # min-heap by distance
-        results: list[tuple[float, int]] = []       # max-heap via negated distance
+        """Same contract as before. The visited set is now a reusable np.uint32 stamp
+        array plus a generation counter, instead of a Python set() allocated per call —
+        this avoids per-query allocation/hashing overhead, which matters once ef and the
+        result set get large."""
+        self._visit_generation += 1
+        gen = self._visit_generation
+        stamp = self._visited_stamp
+
+        candidates: list[tuple[float, int]] = []
+        results: list[tuple[float, int]] = []
 
         if entry_points:
+            for ep in entry_points:
+                stamp[ep] = gen
             dists = self.store.distances(q, np.array(entry_points, dtype=np.int64))
             for ep, d in zip(entry_points, dists):
                 d = float(d)
@@ -60,10 +63,11 @@ class HNSWIndex(Index):
             worst_d = -results[0][0]
             if d_c > worst_d and len(results) >= ef:
                 break
-            neighbours = [n for n in self.graph[layer].get(c, []) if n not in visited]
+            neighbours = [n for n in self.graph[layer].get(c, []) if stamp[n] != gen]
             if not neighbours:
                 continue
-            visited.update(neighbours)
+            for n in neighbours:
+                stamp[n] = gen
             dists = self.store.distances(q, np.array(neighbours, dtype=np.int64))
             for n, d in zip(neighbours, dists):
                 d = float(d)
@@ -149,6 +153,8 @@ class HNSWIndex(Index):
         assert np.array_equal(np.asarray(ids), np.arange(len(ids))), \
             "HNSWIndex expects dense internal ids 0..N-1"
         self.store = VectorStore(vectors)
+        self._visited_stamp = np.zeros(len(vectors), dtype=np.uint32)
+        self._visit_generation = 0
         for node_id in range(len(ids)):
             self._insert(node_id)
 
@@ -202,6 +208,8 @@ class HNSWIndex(Index):
         idx = cls(dim=meta["dim"], M=meta["M"], ef_construction=meta["ef_construction"])
         idx.M0 = meta["M0"]
         idx.store = VectorStore(vectors)
+        idx._visited_stamp = np.zeros(len(vectors), dtype=np.uint32)
+        idx._visit_generation = 0
         idx.entry_point = meta["entry_point"]
         idx.max_level = meta["max_level"]
         idx.levels = meta["levels"]

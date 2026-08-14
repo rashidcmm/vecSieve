@@ -6,6 +6,8 @@ def _build_line_graph(idx: HNSWIndex, points: np.ndarray) -> None:
     idx.store = None
     from vecdb.store.vectors import VectorStore
     idx.store = VectorStore(points)
+    idx._visited_stamp = np.zeros(points.shape[0], dtype=np.uint32)
+    idx._visit_generation = 0
     idx._ensure_layers(0)
     n = points.shape[0]
     for i in range(n):
@@ -42,7 +44,19 @@ def test_search_layer_single_isolated_entry_point_returns_itself():
     idx = HNSWIndex(dim=2, seed=0)
     from vecdb.store.vectors import VectorStore
     idx.store = VectorStore(points)
+    idx._visited_stamp = np.zeros(points.shape[0], dtype=np.uint32)
+    idx._visit_generation = 0
     idx._ensure_layers(0)
     idx.graph[0][0] = []  # no neighbours at all
     result = idx._search_layer(np.array([0.0, 0.0], dtype=np.float32), entry_points=[0], ef=5, layer=0)
     assert result == [(0.0, 0)]
+
+def test_search_layer_visited_state_does_not_leak_between_calls():
+    points = np.array([[float(i), 0.0] for i in range(10)], dtype=np.float32)
+    idx = HNSWIndex(dim=2, seed=0)
+    _build_line_graph(idx, points)
+    idx._visited_stamp = np.zeros(10, dtype=np.uint32)
+    idx._visit_generation = 0
+    first = idx._search_layer(np.array([2.0, 0.0], dtype=np.float32), entry_points=[0], ef=3, layer=0)
+    second = idx._search_layer(np.array([7.0, 0.0], dtype=np.float32), entry_points=[0], ef=3, layer=0)
+    assert second[0][1] == 7  # second call must not treat nodes visited=stale from the first call
