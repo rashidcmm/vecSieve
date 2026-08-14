@@ -83,7 +83,8 @@ class HNSWIndex(Index):
         return sorted((-nd, node) for nd, node in results)
 
     def _search_layer_filtered(self, q: np.ndarray, entry_points: list[int], ef: int, layer: int,
-                                 mask: np.ndarray, budget_remaining: int | None = None) -> tuple[list[tuple[float, int]], int]:
+                                 mask: np.ndarray, budget_remaining: int | None = None,
+                                 two_hop_threshold: float = 0.1) -> tuple[list[tuple[float, int]], int]:
         """Predicate-aware variant of _search_layer. Traverses through every node
         reachable in the graph (visitable) but admits a node into the results heap
         only if mask[node] is True (admissible). Refusing to cross non-matching nodes
@@ -100,6 +101,14 @@ class HNSWIndex(Index):
         results: list[tuple[float, int]] = []
         ops_used = 0
 
+        def _admit(node: int, d: float) -> None:
+            if mask[node]:
+                if len(results) < ef:
+                    heapq.heappush(results, (-d, node))
+                elif d < -results[0][0]:
+                    heapq.heappush(results, (-d, node))
+                    heapq.heappop(results)
+
         if entry_points:
             for ep in entry_points:
                 stamp[ep] = gen
@@ -108,10 +117,7 @@ class HNSWIndex(Index):
             for ep, d in zip(entry_points, dists):
                 d = float(d)
                 heapq.heappush(candidates, (d, ep))
-                if mask[ep]:
-                    heapq.heappush(results, (-d, ep))
-                    if len(results) > ef:
-                        heapq.heappop(results)
+                _admit(ep, d)
 
         while candidates and ops_used < budget_remaining:
             d_c, c = heapq.heappop(candidates)
@@ -127,13 +133,27 @@ class HNSWIndex(Index):
             ops_used += len(neighbours)
             for n, d in zip(neighbours, dists):
                 d = float(d)
-                heapq.heappush(candidates, (d, n))  # traverse through regardless of mask
-                if mask[n]:
-                    if len(results) < ef:
-                        heapq.heappush(results, (-d, n))
-                    elif d < -results[0][0]:
-                        heapq.heappush(results, (-d, n))
-                        heapq.heappop(results)
+                heapq.heappush(candidates, (d, n))
+                _admit(n, d)
+
+            match_rate = sum(1 for n in neighbours if mask[n]) / len(neighbours)
+            if match_rate < two_hop_threshold and ops_used < budget_remaining:
+                two_hop = []
+                seen = set()
+                for n in neighbours:
+                    for nn in self.graph[layer].get(n, []):
+                        if stamp[nn] != gen and nn not in seen:
+                            seen.add(nn)
+                            two_hop.append(nn)
+                if two_hop:
+                    for nn in two_hop:
+                        stamp[nn] = gen
+                    d2 = self.store.distances(q, np.array(two_hop, dtype=np.int64))
+                    ops_used += len(two_hop)
+                    for n2, d in zip(two_hop, d2):
+                        d = float(d)
+                        heapq.heappush(candidates, (d, n2))
+                        _admit(n2, d)
 
         return sorted((-nd, node) for nd, node in results), ops_used
 

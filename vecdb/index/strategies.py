@@ -107,11 +107,12 @@ class FilteredHNSWStrategy(Index):
     starting stranded in a match-free region of the graph."""
 
     def __init__(self, hnsw_index: HNSWIndex, fallback: Index, ef_base: int = 64,
-                 n_seed_matches: int = 8, seed: int = 0):
+                 n_seed_matches: int = 8, seed: int = 0, two_hop_threshold: float = 0.1):
         self.hnsw = hnsw_index
         self.fallback = fallback
         self.ef_base = ef_base
         self.n_seed_matches = n_seed_matches
+        self.two_hop_threshold = two_hop_threshold
         self._rng = np.random.default_rng(seed)
 
     def add(self, vectors: np.ndarray, ids: np.ndarray) -> None:
@@ -144,7 +145,8 @@ class FilteredHNSWStrategy(Index):
             seeds = self._rng.choice(matches, size=n_seed, replace=False).tolist()
             ep = sorted(set(ep) | set(seeds))
 
-        results, _ = self.hnsw._search_layer_filtered(q, ep, ef=ef_eff, layer=0, mask=mask)
+        results, _ = self.hnsw._search_layer_filtered(q, ep, ef=ef_eff, layer=0, mask=mask,
+                                                       two_hop_threshold=self.two_hop_threshold)
         results = results[:k]
 
         latency_ms = (time.perf_counter() - t0) * 1000
