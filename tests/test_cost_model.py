@@ -10,7 +10,7 @@ def test_cost_pre_scales_linearly_with_selectivity():
 
 def test_ef_required_clamped_to_ef_min_and_n():
     p = make_params()
-    assert ef_required(p, k=10, sel_hat=1.0) == p.ef_min
+    assert ef_required(p, k=1, sel_hat=1.0) == p.ef_min
     assert ef_required(p, k=10, sel_hat=1e-9) == p.N
 
 def test_cost_post_increases_as_selectivity_drops():

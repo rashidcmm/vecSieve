@@ -36,7 +36,7 @@ def cost_pre(params: CostModelParams, k: int, sel_hat: float) -> float:
 
 def ef_required(params: CostModelParams, k: int, sel_hat: float) -> float:
     sel_hat = max(sel_hat, 1e-6)
-    return float(np.clip(k / sel_hat, params.ef_min, params.N))
+    return float(np.clip(params.alpha * k / sel_hat, params.ef_min, params.N))
 
 
 def cost_post(params: CostModelParams, k: int, sel_hat: float) -> float:
