@@ -113,13 +113,18 @@ data, via a different mechanism, on a different data slice.
 
 ## Gate status — spec §9 Definition of Done, verified against real files
 
-The checklist below is the same seven items Task 44 verified item-by-item against the real repo
-(not from memory); this report re-confirms each verdict against current file state rather than
-copying it uncritically.
+The checklist below reproduces the source technical plan's own §9 wording
+(`filtered-vector-db-7-day-plan (1).md:642-648`, read directly in this session — not the
+`task-44-brief.md` paraphrase this report originally relied on, which silently dropped a clause
+from item 1; see the fix note in `task-45-report.md` for what changed and why), with one
+deliberate substitution: item 3 names `scripts/run_full_sweep.py`, the script that actually
+exists and runs the sweep today, in place of the source's original `scripts/run_sweep.py
+--dataset siftsmall`, an earlier name the codebase has since superseded. This report re-confirms
+each verdict against current file state rather than copying any prior summary uncritically.
 
 | # | Item | Verdict |
 |---|---|---|
-| 1 | `results/figures/crossover.png` exists and is referenced at the top of `README.md` | **PASS** — file exists (89,051 bytes); `README.md` line 8 embeds it immediately after the opening delta paragraph |
+| 1 | `crossover.png` at the top of the README, **showing at least two strategy changes** | **PARTIAL — fails the full criterion.** `results/figures/crossover.png` exists (89,051 bytes) and is referenced at the top of `README.md` (line 8, immediately after the opening delta paragraph) — that half holds. But the chart shows **exactly one** strategy change (crossover), not the ≥2 this item requires: `predicate_aware` never wins any of the 8 measured selectivities, so the expected three-region shape (pre_filter → predicate_aware → post_filter, two crossovers) collapses to two regions (pre_filter → post_filter, one crossover). This is the project's own headline honest finding — see "What got built" and the interview note above — so it is graded here as a genuine miss, not rounded up to a pass. |
 | 2 | Results table has recall@10, p95 latency, dist_ops for all three strategies at three selectivities | **PASS** — `README.md`'s 9-row table (3 strategies × selectivities 0.001/0.05/0.5), pulled live from `results/sweep_uncorrelated.csv` |
 | 3 | `pip install -e . && python scripts/run_full_sweep.py` runs end to end | **PASS** — confirmed by artifact evidence (`results/sweep_uncorrelated.csv`, `results/sweep_correlated.csv` both present and non-empty) plus Task 38's narrative record; not re-run in this verification pass (a fresh 100K run takes 30–60 min) |
 | 4 | `pytest` is green (or skips only the artifact-gated test) on a clean clone | **CONDITIONAL — not fully green.** One genuine, documented failure: `tests/test_planner_regret.py::test_mean_regret_is_bounded_relative_to_oracle` (cost-model planner regret, 29.782ms vs. 0.135ms threshold). This is a real, honestly-red assertion failure, not a skip and not a bug — the underlying finding (the cost-model planner is ~8x worse than the best fixed strategy) is real and documented, not a test-harness defect. One test correctly skips (`test_hnsw_correctness.py`, artifact-gated). Do not read this row as "pytest ✅." |
@@ -127,9 +132,13 @@ copying it uncritically.
 | 6 | The one-sentence delta is stated in the first paragraph | **PASS** — `README.md`'s opening blockquote states it verbatim |
 | 7 | HNSW recall is within 0.02 of FAISS's at matched parameters, or Phase 3's milestone report documents the fallback honestly | **PASS on the primary clause** — max measured recall gap is 0.011 (hand-written HNSW actually *higher* at ef=10/20/40) across all six matched `ef` values in `docs/superpowers/milestones/04-tuning-scale.md`; the FAISS-wrapping fallback was never invoked. (Note: this item is about *recall*, not *latency* — the ~13–15x latency gap is real but is a separate, honestly-documented metric, not a violation of this checklist item.) |
 
-**Bottom line: 6 of 7 items are unconditional PASS; item 4 (`pytest` green) is the one item that
-does not hold unconditionally, for a documented, understood, non-bug reason.** The project does
-not claim a fully green test suite anywhere in this report or in `README.md`.
+**Bottom line: 5 of 7 items are unconditional PASS. Two items do not hold unconditionally, both
+for documented, understood, non-bug reasons: item 1 (`crossover.png` showing ≥2 strategy changes)
+shows only 1, because `predicate_aware` never wins; item 4 (`pytest` green) has one genuine,
+documented failure.** The project does not claim a fully green test suite, nor a two-crossover
+chart, anywhere in this report or in `README.md` — both of these are the same class of honestly-
+reported negative result as everything else in "What got built" above, not gaps this table papers
+over.
 
 ## Interview note (spoken, ~90 seconds, per source plan §7)
 
@@ -168,3 +177,5 @@ loosening the threshold to hide it."
 - `docs/superpowers/milestones/07-planner-sweep-figures.md`,
   `docs/superpowers/milestones/06-predicate-aware-traversal.md`,
   `docs/superpowers/milestones/04-tuning-scale.md`
+- `filtered-vector-db-7-day-plan (1).md` (repo root) — source technical plan, §9 Definition of
+  Done (lines 638-650), read directly for the Gate status table above
