@@ -59,3 +59,17 @@ def test_stats_endpoint_reports_vector_count_and_dim():
     body = resp.json()
     assert body["n_vectors"] == 50
     assert body["dim"] == 4
+
+def test_persist_endpoint_accepts_valid_name():
+    client, _ = _client()
+    resp = client.post("/persist?name=test_hnsw_temp")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "test_hnsw_temp" in body["path"]
+
+def test_persist_endpoint_rejects_path_traversal():
+    client, _ = _client()
+    resp = client.post("/persist?name=../evil")
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "invalid name" in detail or "path escapes data dir" in detail

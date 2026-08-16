@@ -19,6 +19,7 @@ from vecdb.service.schemas import (
 )
 
 DATA_DIR = Path("data")
+DATA_ROOT = Path("data").resolve()
 
 
 class VecDBService:
@@ -140,5 +141,10 @@ def stats(service: VecDBService = Depends(get_service)):
 
 
 @app.post("/persist", response_model=PersistResponse)
-def persist(path: str = "data/hnsw_100k", service: VecDBService = Depends(get_service)):
-    return service.persist(path)
+def persist(name: str = "hnsw_100k", service: VecDBService = Depends(get_service)):
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(status_code=400, detail="invalid name")
+    target = (DATA_ROOT / name).resolve()
+    if not str(target).startswith(str(DATA_ROOT) + "\\") and not str(target).startswith(str(DATA_ROOT) + "/"):
+        raise HTTPException(status_code=400, detail="path escapes data dir")
+    return service.persist(str(target))
