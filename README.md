@@ -28,9 +28,16 @@ warmup, uncorrelated metadata).
 | 0.5 | post_filter | 0.992 | 1.63 | 1,178 |
 | 0.5 | predicate_aware | 1.000 | 5.35 | 2,993 |
 
-At every selectivity in this table, `predicate_aware` is the slowest of the three strategies —
-that is not an artefact of which three rows got picked; see "What I got wrong" for the full
-picture across all 8 grid points.
+`predicate_aware` is never the fastest of the three strategies at any of the 8 selectivities in
+the full sweep (the winner alternates only between `pre_filter` at low/mid selectivity and
+`post_filter` at high selectivity — see the crossover chart above); it is not the slowest at
+every selectivity shown above, either — e.g. at s=0.001 `post_filter` is far slower (440.60ms vs.
+78.39ms), and at s=0.5 `pre_filter` is slower (8.54ms vs. 5.35ms). See "What I got wrong" for the
+full picture across all 8 grid points.
+
+*(These numbers come from the current `results/sweep_uncorrelated.csv`, regenerated in Phase 7
+with the planner as a 4th executor; they differ by a few percent from numbers quoted in the
+Phase 5/6 milestone docs, which were written against an earlier snapshot of this file.)*
 
 **A cost-based query planner for approximate nearest-neighbour search that chooses between
 pre-filtering, post-filtering, and predicate-aware graph traversal using an estimated predicate
